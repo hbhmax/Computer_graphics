@@ -58,27 +58,38 @@ struct GlobalUniforms {
 
 static std::vector<Vertex> g_vertices;
 static std::vector<uint32_t> g_indices;
+static std::vector<uint32_t> g_edgeIndices;
 
 static void buildTruncatedTetrahedron() {
     std::vector<glm::vec3> raw = {
-        {0, 1, 3}, {0, -1, -3}, {0, 3, 1}, {0, -3, -1},
-        {1, 0, 3}, {-1, 0, -3}, {3, 0, 1}, {-3, 0, -1},
-        {1, 3, 0}, {-1, -3, 0}, {3, 1, 0}, {-3, -1, 0}
+        {3, 1, 1}, {3, -1, -1}, {1, 3, 1}, {-1, 3, -1},
+        {1, 1, 3}, {-1, -1, 3}, {1, -1, -3}, {-1, 1, -3},
+        {1, -3, -1}, {-1, -3, 1}, {-3, 1, -1}, {-3, -1, 1}
     };
     for (auto &p : raw) {
         g_vertices.push_back({p / 3.0f});
     }
     std::vector<std::array<uint32_t, 3>> tris = {
-        {10, 1, 3}, {10, 3, 6}, {10, 5, 1}, {10, 5, 8},
-        {2, 10, 6}, {2, 10, 8}, {2, 4, 6}, {2, 4, 0},
-        {2, 5, 7}, {2, 5, 8}, {2, 11, 7}, {2, 11, 0},
-        {9, 1, 3}, {9, 5, 7}, {9, 5, 1}, {9, 11, 7},
-        {9, 3, 6}, {9, 4, 6}, {9, 4, 0}, {9, 11, 0}
+        {1, 6, 8}, {7, 3, 10}, {11, 9, 5}, {4, 2, 0},
+        {2, 1, 0}, {2, 7, 6}, {2, 1, 6}, {2, 7, 3},
+        {11, 9, 8}, {11, 7, 6}, {11, 6, 8}, {11, 7, 10},
+        {4, 1, 0}, {4, 9, 8}, {4, 1, 8}, {4, 9, 5},
+        {4, 2, 3}, {4, 11, 10}, {4, 3, 10}, {4, 11, 5}
     };
     for (auto &t : tris) {
         g_indices.push_back(t[0]);
         g_indices.push_back(t[1]);
         g_indices.push_back(t[2]);
+    }
+
+    std::vector<std::array<uint32_t, 2>> edges = {
+        {0, 1}, {0, 2}, {0, 4}, {1, 6}, {1, 8}, {2, 3},
+        {2, 4}, {3, 7}, {3, 10}, {4, 5}, {5, 9}, {5, 11},
+        {6, 7}, {6, 8}, {7, 10}, {8, 9}, {9, 11}, {10, 11}
+    };
+    for (auto &e : edges) {
+        g_edgeIndices.push_back(e[0]);
+        g_edgeIndices.push_back(e[1]);
     }
 }
 
@@ -129,6 +140,7 @@ private:
     VkDescriptorSetLayout descriptorSetLayout;
     VkPipelineLayout pipelineLayout;
     VkPipeline graphicsPipeline;
+    VkPipeline linePipeline;
 
     VkCommandPool commandPool;
 
@@ -136,6 +148,8 @@ private:
     VkDeviceMemory vertexBufferMemory;
     VkBuffer indexBuffer;
     VkDeviceMemory indexBufferMemory;
+    VkBuffer edgeIndexBuffer;
+    VkDeviceMemory edgeIndexBufferMemory;
 
     std::vector<VkBuffer> uniformBuffers;
     std::vector<VkDeviceMemory> uniformBuffersMemory;
@@ -197,6 +211,7 @@ private:
         createFramebuffers();
         createVertexBuffer();
         createIndexBuffer();
+        createEdgeIndexBuffer();
         createUniformBuffers();
         createDescriptorPool();
         createDescriptorSets();
@@ -665,6 +680,36 @@ private:
             throw std::runtime_error("failed to create graphics pipeline");
         }
 
+        auto lineFragCode = readFile(std::string(SHADER_DIR) + "/shader_line.frag.spv");
+        VkShaderModule lineFragModule = createShaderModule(lineFragCode);
+
+        VkPipelineShaderStageCreateInfo lineFragStage{};
+        lineFragStage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        lineFragStage.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+        lineFragStage.module = lineFragModule;
+        lineFragStage.pName = "main";
+
+        VkPipelineShaderStageCreateInfo lineStages[] = {vertStage, lineFragStage};
+
+        VkPipelineInputAssemblyStateCreateInfo lineAssembly{};
+        lineAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+        lineAssembly.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
+
+        VkPipelineRasterizationStateCreateInfo lineRasterizer = rasterizer;
+        lineRasterizer.depthBiasEnable = VK_TRUE;
+        lineRasterizer.depthBiasConstantFactor = -2.0f;
+        lineRasterizer.depthBiasSlopeFactor = -2.0f;
+
+        VkGraphicsPipelineCreateInfo linePipelineInfo = pipelineInfo;
+        linePipelineInfo.pStages = lineStages;
+        linePipelineInfo.pInputAssemblyState = &lineAssembly;
+        linePipelineInfo.pRasterizationState = &lineRasterizer;
+
+        if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &linePipelineInfo, nullptr, &linePipeline) != VK_SUCCESS) {
+            throw std::runtime_error("failed to create line graphics pipeline");
+        }
+
+        vkDestroyShaderModule(device, lineFragModule, nullptr);
         vkDestroyShaderModule(device, fragModule, nullptr);
         vkDestroyShaderModule(device, vertModule, nullptr);
     }
@@ -859,6 +904,29 @@ private:
                      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, indexBuffer, indexBufferMemory);
 
         copyBuffer(stagingBuffer, indexBuffer, bufferSize);
+
+        vkDestroyBuffer(device, stagingBuffer, nullptr);
+        vkFreeMemory(device, stagingBufferMemory, nullptr);
+    }
+
+    void createEdgeIndexBuffer() {
+        VkDeviceSize bufferSize = sizeof(uint32_t) * g_edgeIndices.size();
+
+        VkBuffer stagingBuffer;
+        VkDeviceMemory stagingBufferMemory;
+        createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                     stagingBuffer, stagingBufferMemory);
+
+        void *data;
+        vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);
+        memcpy(data, g_edgeIndices.data(), (size_t) bufferSize);
+        vkUnmapMemory(device, stagingBufferMemory);
+
+        createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, edgeIndexBuffer, edgeIndexBufferMemory);
+
+        copyBuffer(stagingBuffer, edgeIndexBuffer, bufferSize);
 
         vkDestroyBuffer(device, stagingBuffer, nullptr);
         vkFreeMemory(device, stagingBufferMemory, nullptr);
@@ -1166,6 +1234,10 @@ private:
 
         vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(g_indices.size()), 1, 0, 0, 0);
 
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, linePipeline);
+        vkCmdBindIndexBuffer(commandBuffer, edgeIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(g_edgeIndices.size()), 1, 0, 0, 0);
+
         ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), commandBuffer);
 
         vkCmdEndRenderPass(commandBuffer);
@@ -1261,6 +1333,7 @@ private:
 
         cleanupSwapChain();
 
+        vkDestroyPipeline(device, linePipeline, nullptr);
         vkDestroyPipeline(device, graphicsPipeline, nullptr);
         vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
         vkDestroyRenderPass(device, renderPass, nullptr);
@@ -1273,6 +1346,8 @@ private:
         vkDestroyDescriptorPool(device, descriptorPool, nullptr);
         vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
 
+        vkDestroyBuffer(device, edgeIndexBuffer, nullptr);
+        vkFreeMemory(device, edgeIndexBufferMemory, nullptr);
         vkDestroyBuffer(device, indexBuffer, nullptr);
         vkFreeMemory(device, indexBufferMemory, nullptr);
         vkDestroyBuffer(device, vertexBuffer, nullptr);

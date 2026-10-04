@@ -55,6 +55,7 @@ endif()
 set(SHADER_SOURCES
     ${CMAKE_SOURCE_DIR}/shaders/shader.vert
     ${CMAKE_SOURCE_DIR}/shaders/shader.frag
+    ${CMAKE_SOURCE_DIR}/shaders/shader_line.frag
 )
 set(SHADER_OUTPUT_DIR ${CMAKE_BINARY_DIR}/shaders)
 file(MAKE_DIRECTORY ${SHADER_OUTPUT_DIR})
